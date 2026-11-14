@@ -1,6 +1,6 @@
 import { parse as parseToml } from "smol-toml";
 import { describe, expect, it } from "vitest";
-import { ConfigError, getConfig, loadConfig, parseOrigins } from "../src/config";
+import { ConfigError, getConfig, loadCleanupConfig, loadConfig, parseOrigins } from "../src/config";
 import wranglerToml from "../wrangler.toml?raw";
 
 const good = {
@@ -82,7 +82,7 @@ describe("wrangler.toml", () => {
   const dev = toml.vars;
   const prod = toml.env?.production?.vars;
   // Per-environment values come from .env / the deploy environment, not wrangler.toml.
-  const perEnv = { JWT_SECRET: "x", ALLOWED_ORIGINS: "https://app.example", PUBLIC_BASE_URL: "https://media.example" };
+  const perEnv = { JWT_SECRET: "x", ALLOWED_ORIGINS: "https://app.example", PUBLIC_BASE_URL: "https://media.example", BACKEND_URL: "https://api.example", BACKEND_API_KEY: "k" };
 
   it("production [vars] match dev [vars]", () => {
     expect(prod).toBeDefined();
@@ -92,6 +92,17 @@ describe("wrangler.toml", () => {
   it("[vars] form a valid config", () => {
     expect(() => loadConfig({ ...dev, ...perEnv })).not.toThrow();
     expect(() => loadConfig({ ...prod, ...perEnv })).not.toThrow();
+  });
+
+  it("both environments run the daily cleanup", () => {
+    expect(toml.triggers?.crons).toEqual(["0 3 * * *"]);
+    expect(toml.env?.production?.triggers?.crons).toEqual(toml.triggers?.crons);
+  });
+
+  it("cleanup settings in [vars] are valid", () => {
+    const withBackend = { BACKEND_URL: "https://api.example", BACKEND_API_KEY: "k" };
+    expect(loadCleanupConfig({ ...dev, ...withBackend })).not.toBeNull();
+    expect(loadCleanupConfig({ ...prod, ...withBackend })).not.toBeNull();
   });
 
   it("keeps per-environment values out of [vars]", () => {

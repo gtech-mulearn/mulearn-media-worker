@@ -1,3 +1,4 @@
+import { runCleanup } from "./cleanup";
 import { ConfigError, getConfig, parseOrigins, type Config } from "./config";
 import { corsHeaders, fail, json } from "./http";
 import { verifyJwt } from "./jwt";
@@ -145,5 +146,12 @@ export default {
     }
 
     return json({ key, url: `${cfg.publicBaseUrl}/${key}`, size: out.byteLength }, 200, cors);
+  },
+
+  // Daily cron (see [triggers] in wrangler.toml): remove images nothing uses any more.
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(
+      runCleanup(env).catch((e) => console.error("Cleanup crashed:", e instanceof Error ? e.message : String(e))),
+    );
   },
 };

@@ -12,6 +12,9 @@ import { dirname, join } from "node:path";
 import { EnvFileError, parseEnvFile } from "./env-file.mjs";
 
 const SECRETS = ["JWT_SECRET", "ALLOWED_ORIGINS", "PUBLIC_BASE_URL"];
+// Needed only for the daily cleanup of unused images. Uploaded when set in .env;
+// without them the cleanup is skipped and uploads are not affected.
+const OPTIONAL_SECRETS = ["BACKEND_URL", "BACKEND_API_KEY"];
 const HOSTNAME = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
 
 function fail(message) {
@@ -38,7 +41,11 @@ const bin = typeof pkg.bin === "string" ? pkg.bin : pkg.bin.wrangler;
 const wrangler = join(dirname(pkgPath), bin);
 
 const file = "secrets.json";
-writeFileSync(file, JSON.stringify(Object.fromEntries(SECRETS.map((k) => [k, env[k]]))), { mode: 0o600 });
+const uploaded = [...SECRETS, ...OPTIONAL_SECRETS.filter((k) => env[k])];
+if (uploaded.length < SECRETS.length + OPTIONAL_SECRETS.length) {
+  console.warn("Cleanup of unused images is off: set BACKEND_URL and BACKEND_API_KEY in .env to enable it.");
+}
+writeFileSync(file, JSON.stringify(Object.fromEntries(uploaded.map((k) => [k, env[k]]))), { mode: 0o600 });
 try {
   const r = spawnSync(
     process.execPath,

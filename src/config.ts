@@ -42,8 +42,9 @@ function int(env: RawEnv, name: string, min: number, max: number): number {
 }
 
 function parseModules(env: RawEnv): Record<string, ModuleRule> {
-  // Accept a JSON string (same format as the backend's MEDIA_MODULES) or an
-  // already-parsed object (if written as a TOML table in wrangler.toml).
+  // Accept a JSON string (as written in wrangler.toml) or an already-parsed
+  // object (if written as a TOML table). Names and folders must match the
+  // backend's utils/media_modules.py.
   const v = env.MEDIA_MODULES;
   let data: unknown = v;
   if (typeof v !== "object" || v === null) {
@@ -101,4 +102,60 @@ export function getConfig(env: RawEnv): Config {
     cache.set(env, cfg);
   }
   return cfg;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Scheduled cleanup of unused images (see src/cleanup.ts)
+// ─────────────────────────────────────────────────────────────
+
+export interface CleanupConfig {
+  /** Backend base URL, no trailing slash. */
+  backendUrl: string;
+  /** Sent as the Api-Key header; same value as the backend's BACKEND_API_KEY. */
+  backendApiKey: string;
+  /** Images younger than this are never touched (an upload may not be attached yet). */
+  graceMs: number;
+  /** Most images one run may delete, as a safety limit. */
+  maxDeletes: number;
+  /** When true, the run only logs what it would delete. */
+  dryRun: boolean;
+}
+
+function bool(env: RawEnv, name: string): boolean {
+  const v = env[name];
+  if (typeof v === "boolean") return v;
+  const s = typeof v === "string" ? v.trim().toLowerCase() : "";
+  if (s === "true") return true;
+  if (s === "false") return false;
+  throw new ConfigError(`${name} must be true or false`);
+}
+
+/**
+ * Cleanup settings, or null when the backend connection is not configured
+ * (cleanup is then skipped; uploads are not affected). A backend connection
+ * with invalid tuning values is a ConfigError, so a typo cannot turn into a
+ * run that deletes more than intended.
+ */
+export function loadCleanupConfig(env: RawEnv): CleanupConfig | null {
+  const url = typeof env.BACKEND_URL === "string" ? env.BACKEND_URL.trim() : "";
+  const key = typeof env.BACKEND_API_KEY === "string" ? env.BACKEND_API_KEY.trim() : "";
+  if (!url || !key) return null;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new ConfigError("BACKEND_URL is not a valid URL");
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new ConfigError("BACKEND_URL must start with https:// or http://");
+  }
+
+  return {
+    backendUrl: url.replace(/\/+$/, ""),
+    backendApiKey: key,
+    graceMs: int(env, "CLEANUP_GRACE_HOURS", 1, 24 * 365) * 3_600_000,
+    maxDeletes: int(env, "CLEANUP_MAX_DELETES", 1, 100_000),
+    dryRun: bool(env, "CLEANUP_DRY_RUN"),
+  };
 }

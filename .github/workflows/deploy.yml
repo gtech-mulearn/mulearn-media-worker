@@ -54,13 +54,22 @@ jobs:
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           ALLOWED_ORIGINS: ${{ vars.ALLOWED_ORIGINS }}
           PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+          # Optional: only needed for the daily cleanup of unused images.
+          BACKEND_URL: ${{ vars.BACKEND_URL }}
+          BACKEND_API_KEY: ${{ secrets.BACKEND_API_KEY }}
         run: |
           for v in JWT_SECRET ALLOWED_ORIGINS PUBLIC_BASE_URL; do
             if [ -z "${!v}" ]; then echo "::error::$v is not set for this environment"; exit 1; fi
           done
           umask 077
+          # Empty optional values are left out of the file.
           jq -n --arg a "$JWT_SECRET" --arg b "$ALLOWED_ORIGINS" --arg c "$PUBLIC_BASE_URL" \
-            '{JWT_SECRET: $a, ALLOWED_ORIGINS: $b, PUBLIC_BASE_URL: $c}' > secrets.json
+                --arg d "$BACKEND_URL" --arg e "$BACKEND_API_KEY" \
+            '{JWT_SECRET: $a, ALLOWED_ORIGINS: $b, PUBLIC_BASE_URL: $c, BACKEND_URL: $d, BACKEND_API_KEY: $e}
+             | with_entries(select(.value != ""))' > secrets.json
+          if [ -z "$BACKEND_URL" ] || [ -z "$BACKEND_API_KEY" ]; then
+            echo "::warning::BACKEND_URL / BACKEND_API_KEY not set: cleanup of unused images is off"
+          fi
 
       # The worker's custom domain comes from the WORKER_DOMAIN variable, not wrangler.toml.
       - name: Deploy

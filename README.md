@@ -43,6 +43,11 @@ Nothing is hard-coded in the code. If a value is missing or invalid, the worker 
 | `ALLOWED_ORIGINS` | value | `.env` locally, GitHub variable in CI | Comma-separated browser origins allowed to call `/upload` |
 | `PUBLIC_BASE_URL` | value | `.env` locally, GitHub variable in CI | Public URL of the bucket (same as the backend's public URL setting) |
 | `WORKER_DOMAIN` | value | `.env` locally, GitHub variable in CI | Custom domain the worker is deployed to. Passed as `--domain`; not read by the code |
+| `BACKEND_URL` | value, optional | `.env` locally, GitHub variable in CI | Backend address, used only by the daily cleanup |
+| `BACKEND_API_KEY` | **secret**, optional | `.env` locally, GitHub secret in CI | The backend's `BACKEND_API_KEY`, sent as `Api-Key` by the cleanup |
+| `CLEANUP_GRACE_HOURS` | setting | `wrangler.toml` `[vars]` | Images younger than this are never cleaned up |
+| `CLEANUP_MAX_DELETES` | setting | `wrangler.toml` `[vars]` | Most images one cleanup run may delete |
+| `CLEANUP_DRY_RUN` | setting | `wrangler.toml` `[vars]` | `true` = only log what would be deleted |
 
 `wrangler.toml` also holds the names Wrangler needs at deploy time: the worker name and the
 R2 bucket name. Wrangler cannot read those from `.env` or the command line.
@@ -58,11 +63,39 @@ R2 bucket name. Wrangler cannot read those from `.env` or the command line.
 }
 ```
 - `module_name`: what the client sends in the `module` field.
-- `folder`: where files go in the bucket. It must match the backend's module setting.
+- `folder`: where files go in the bucket. It must match the backend's `utils/media_modules.py`.
 - `maxBytes`: largest accepted upload.
 - `maxDimension`: images are scaled down to fit inside this width and height.
 
-To add a module, add an entry here (dev and production) and in the backend, then deploy.
+To add a module, add an entry here (dev and production) and in the backend's
+`utils/media_modules.py` (same name and folder), then deploy both.
+
+### Cleanup of unused images
+Replaced, removed and never-attached uploads stay in the bucket, because the backend holds no
+storage credentials. A daily scheduled job in this worker (`src/cleanup.ts`) removes them:
+
+1. It lists images that are older than `CLEANUP_GRACE_HOURS`.
+2. It asks the backend, `POST /api/v1/media/unreferenced-keys/` (header `Api-Key`), which of them
+   no record uses.
+3. It deletes only those.
+
+Safety rules:
+- Images younger than the grace period are never touched (an upload may still be waiting to be saved).
+- Only keys named exactly like worker uploads are considered, and only keys the backend names
+  **and** this run asked about are deleted.
+- If the backend cannot be reached or answers oddly, nothing is deleted.
+- One run deletes at most `CLEANUP_MAX_DELETES` images.
+- With `CLEANUP_DRY_RUN = true` (the default) it only logs what it would delete.
+
+To turn it on:
+1. Set `BACKEND_URL` (variable) and `BACKEND_API_KEY` (secret, the backend's `BACKEND_API_KEY`)
+   for the environment. Without them the job is skipped and uploads are not affected.
+2. Deploy, then read the worker's logs after the first run (03:00 UTC). A dry run logs
+   `Cleanup (dry run) done: checked=... would_delete=...` and the first 20 keys.
+3. If the list looks right, set `CLEANUP_DRY_RUN = false` in `wrangler.toml` (dev and production) and deploy.
+
+An image uploaded but not saved within the grace period is removed; saving it afterwards fails
+with "Image not found. Please upload it again".
 
 ### Local `.env`
 Copy `.env.example` to `.env` and fill it in. `.env` is git-ignored.
@@ -71,6 +104,9 @@ JWT_SECRET='<same-secret-as-the-backend>'
 ALLOWED_ORIGINS=http://localhost:3000
 PUBLIC_BASE_URL=https://<media-domain>
 WORKER_DOMAIN=<worker-domain>
+# Optional, for the daily cleanup of unused images:
+BACKEND_URL=https://<backend-domain>
+BACKEND_API_KEY=<same-as-the-backend-BACKEND_API_KEY>
 ```
 Quoting rules for `npm run dev` (Wrangler's `.env` parser):
 - Use single quotes for values that contain `#` or `"`. Without quotes, everything after `#` is dropped.
@@ -119,6 +155,7 @@ Images, R2 and config failures are logged with their error code (never secret va
 ## Notes
 - The database stores only keys, so changing the public domain changes every image URL at once. Update
   `PUBLIC_BASE_URL` (worker) and the backend's public URL setting together.
-- Images that are replaced or never attached are not deleted yet.
+- Images that are replaced, removed or never saved are deleted by the daily cleanup once it is
+  turned on (see "Cleanup of unused images").
 - Animated GIFs are stored as a single still frame.
 - The `workers.dev` address and preview URLs are turned off. Only the custom domain answers.

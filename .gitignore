@@ -6,3 +6,6 @@ node_modules/
 .dev.vars*
 secrets.json
 dist/
+
+# Local setup guide, not committed
+docs/SETUP.md
